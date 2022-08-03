@@ -1,0 +1,169 @@
+#!/bin/bash
+
+if [[ -z "$(which sed)" ]]; then
+    echo "ERROR: [sed] is not installed!"
+    exit 1
+fi
+
+##################
+
+function now_yell {
+    if [[ "$TERM" == 'dumb' ]]; then
+        echo -e $@ | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g"
+    else
+        echo -e $@
+    fi
+}
+
+##################
+
+function now_die {
+    if [[ -z "$1" ]]; then
+        now_yell "\033[36mPlease set [die \"<message>\"]\033[0m"
+    else
+        now_yell "\033[1;31m$@\033[0m"
+    fi
+    exit 1
+}
+
+function now_warn {
+    if [[ -z "$1" ]]; then
+        now_yell "\033[36mPlease set [warn \"<message>\"]\033[0m"
+        exit 1
+    else
+        now_yell "\033[1;33m$@\033[0m"
+        exit 0
+    fi
+}
+
+function now_info {
+    if [[ -z "$1" ]]; then
+        now_yell "\033[36mPlease set [info \"<message>\"]\033[0m"
+        exit 1
+    else
+        now_yell "\033[1m$@\033[0m"
+    fi
+}
+
+function now_ok {
+    if [[ -z "$1" ]]; then
+        now_yell "\033[36mPlease set [info \"<message>\"]\033[0m"
+        exit 1
+    else
+        now_yell "\033[1;32m$@\033[0m"
+    fi
+}
+
+##################
+
+if [[ -z "${RDB_VERBOSITY}" ]]; then
+    RDB_VERBOSITY=3
+fi
+
+if [[ -z "$(which rdiff-backup)" ]]; then
+    now_die "ERROR: [rdiff-backup] is not installed!"
+fi
+
+##################
+
+function rdb-backup {
+    if [[ -z "${RDB_VERBOSITY}" || -z "$1" || -z "$2" || -z "$3" ]]; then
+        now_die "Please set $0 <SOURCE> <DESTINATION> <PARAMETERS>"
+    fi
+
+    local ALL=($*)
+    local SRC=${ALL[0]}
+    unset ALL[0]
+    local DST=${ALL[1]}
+    unset ALL[1]
+    local PARAMS=${ALL[@]}
+
+    local LOCK="${DST}.lock"
+    if [[ -f "${LOCK}" ]]; then
+        now_warn "Another rdiff-backup process is already running in [${DST}]!"
+    fi
+    mkdir -p "$(dirname ${DST})"
+    touch "${LOCK}"
+
+    rdiff-backup -v ${RDB_VERBOSITY} --test-server ${PARAMS} "${SRC}" 2> /dev/null && now_info "Attempting to backup [${SRC}] to [${DST}] with options: ${PARAMS}" || now_die "There are some problems with [${SRC}]!"
+    rdiff-backup -v ${RDB_VERBOSITY} ${PARAMS} "${SRC}" "${DST}" && now_ok "Successfull backup [${SRC}] to [${DST}] with options: ${PARAMS}" || now_die "There are some problems with [${DST}]!"
+
+    rm -f "${LOCK}"
+}
+
+function rdb-clean {
+    if [[ -z "${RDB_VERBOSITY}" || -z "$1" || -z "$2" ]]; then
+        now_die "Please set $0 <DESTINATION> <PARAMETERS>"
+    fi
+
+    local ALL=($*)
+    local DST=${ALL[0]}
+    unset ALL[0]
+    local PARAMS=${ALL[@]}
+
+    if [[ ! -d "${DST}" ]]; then
+        now_die "No rdiff-backup destination dir were found at [${DST}]!"
+    fi
+
+    local LOCK="${DST}.lock"
+    if [[ -f "${LOCK}" ]]; then
+        now_warn "Another rdiff-backup process is already running in [${DST}]!"
+    fi
+    touch "${LOCK}"
+
+    now_info "Cleaning up ${DST} with options: ${PARAMS}"
+    rdiff-backup -v ${RDB_VERBOSITY} ${PARAMS} "${DST}" && now_ok "Successfully cleaned [${DST}] with options: ${PARAMS}" || now_die "There are some problems with [${DST}]!"
+
+    rm -f "${LOCK}"
+}
+
+function rdb-restore {
+    if [[ -z "${RDB_VERBOSITY}" || -z "$1" || -z "$2" || -z "$3" ]]; then
+        now_die "Please set $0 <SOURCE> <DESTINATION> <PARAMETERS>"
+    fi
+
+    local ALL=($*)
+    local SRC=${ALL[0]}
+    unset ALL[0]
+    local DST=${ALL[1]}
+    unset ALL[1]
+    local PARAMS=${ALL[@]}
+
+    if [[ ! -d "${SRC}" ]]; then
+        now_die "No rdiff-backup destination dir were found at [${SRC}]!"
+    fi
+
+    local LOCK="${SRC}.lock"
+    if [[ -f "${LOCK}" ]]; then
+        now_warn "Another rdiff-backup process is already running in [${SRC}]!"
+        exit 1
+    fi
+    touch "${LOCK}"
+
+    rdiff-backup -v ${RDB_VERBOSITY} --test-server ${PARAMS} "${DST}" 2> /dev/null && now_info "Attempting to restore [${SRC}] to [${DST}] with options: ${PARAMS}" || now_die "There are some problems with [${DST}]!"
+    rdiff-backup -v ${RDB_VERBOSITY} ${PARAMS} "${SRC}" "${DST}" && now_ok "Successfull restore [${SRC}] to [${DST}] with options: ${PARAMS}" || now_die "There are some problems with [${SRC}]!"
+
+    rm -f "${LOCK}"
+}
+
+##################
+
+LAUNCHER=$(basename $0)
+
+case $LAUNCHER in
+    rdb-backup)
+        rdb-backup $@
+        ;;
+    rdb-clean)
+        rdb-clean $@
+        ;;
+    rdb-restore)
+        rdb-restore $@
+        ;;
+    *)
+        now_ok "Create symlinks [rdb-backup], [rdb-clean] and [rdb-restore] to this file [$0]. Then you could use examples..."
+        now_info 'rdb-backup "root@192.168.253.223::/usr" "/var/local/myserver-usr" "--print-statistics --ssh-no-compression --create-full-path --exclude-other-filesystems --preserve-numerical-ids"'
+        now_info 'rdb-clean "/var/local/myserver-usr" "--remove-older-than 2B --force --print-statistics"'
+        now_info 'rdb-restore "/var/local/myserver-usr" "root@192.168.253.223::/usr" "-r 2012-03-06T02:37:21"'
+    ;;
+esac
